@@ -1,6 +1,6 @@
 use super::*;
-use crate::{Adapter, Vendor};
 use crate::metal::{open::PcieLink, vulkan::physical::PciBusInfo};
+use crate::{Adapter, Vendor};
 
 fn radv(device_type: PhysicalDeviceType) -> Identity {
     Identity {

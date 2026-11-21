@@ -966,14 +966,19 @@ pub fn select(processors: &[Processor]) -> Result<Vec<usize>, Refusal> {
 /// nothing to lead the roster; [`select_observed`] then reads the APIC ID of
 /// the processor it is already running on instead.
 pub fn names_no_bootstrap_processor(processors: &[Processor]) -> bool {
-    !processors.iter().any(|processor| processor.flags & BSP != 0)
+    !processors
+        .iter()
+        .any(|processor| processor.flags & BSP != 0)
 }
 
 /// [`select`] with the bootstrap processor already chosen. The rest of the
 /// order is [`select`]'s, so a caller that learned the BSP elsewhere keeps
 /// the same roster.
 pub fn select_naming(processors: &[Processor], bsp: usize) -> Result<Vec<usize>, Refusal> {
-    if processors.get(bsp).is_none_or(|processor| !processor.available()) {
+    if processors
+        .get(bsp)
+        .is_none_or(|processor| !processor.available())
+    {
         return Err(Refusal::BootstrapUnavailable);
     }
     let mut candidates: Vec<_> = processors

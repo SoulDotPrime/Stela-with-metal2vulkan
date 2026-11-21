@@ -1,4 +1,5 @@
 use super::*;
+use crate::{Adapter, Vendor};
 use crate::metal::{open::PcieLink, vulkan::physical::PciBusInfo};
 
 fn radv(device_type: PhysicalDeviceType) -> Identity {
@@ -100,4 +101,61 @@ fn other_vendors_drivers_families_and_devices_are_refused() {
         admit_family(&radv(PhysicalDeviceType::Cpu), RAPHAEL, attachment(false)),
         Err(Refusal::NotGpu(PhysicalDeviceType::Cpu))
     );
+}
+
+/// GFX8: `AMDGPU_FAMILY_VI`, which amdgpu's interface answers for Polaris
+/// (`AMDGPU_FAMILY_VI` covers Iceland, Tonga and Polaris), and the family a
+/// Radeon RX 480 (1002:67df, Polaris10) reports. Every other case here is
+/// GFX9 or newer; this is the oldest device RADV drives and the one the
+/// owner's PC has.
+const GFX8: u32 = 130;
+
+fn polaris(device_type: PhysicalDeviceType) -> Identity {
+    let mut identity = radv(device_type);
+    identity.device_id = 0x67df;
+    identity.device_name = String::from("AMD Radeon RX 480 Graphics (RADV POLARIS10)");
+    identity.api_version = (1 << 22) | (4 << 12) | (1 << 0);
+    identity
+}
+
+#[test]
+fn gfx8_is_admitted_by_the_family_name_amdgpus_interface_gives_it() {
+    let platform = admit_family(
+        &polaris(PhysicalDeviceType::DiscreteGpu),
+        GFX8,
+        attachment(false),
+    )
+    .unwrap();
+    assert_eq!(platform.architecture, "VI");
+    assert_eq!(platform.location, DeviceLocation::Slot);
+    assert_eq!(
+        platform.max_transfer_rate,
+        attachment(false).link.bytes_per_second()
+    );
+    assert!(!platform.headless && !platform.removable);
+    // A linear surface's row and offset rules are the same across AMD's
+    // families at this level; the per-family pitch rules live in addrlib,
+    // which RADV applies, not here.
+    assert_eq!(platform.linear_row_alignment, 256);
+    assert_eq!(platform.linear_offset_alignment, 256);
+    assert_eq!(platform.sparse_page_bytes, 64 << 10);
+}
+
+#[test]
+fn the_owner_pcs_device_is_one_amdgpu_probes_and_admits() {
+    // What the boot asks before the GPU stack sees the adapter: amdgpu's
+    // table names 0x67df as Probed, with the memory controller's 40-bit mask.
+    let adapter = Adapter {
+        address: crate::bus::pci::Address {
+            segment: 0,
+            bus: 3,
+            device: 0,
+            function: 0,
+        },
+        vendor: Vendor::Amd,
+        device: 0x67df,
+        class: [0x03, 0x00, 0x00],
+    };
+    assert_eq!(crate::amdgpu::admits(&adapter), Ok(()));
+    assert_eq!(crate::amdgpu::dma_bits(&adapter), 40);
 }

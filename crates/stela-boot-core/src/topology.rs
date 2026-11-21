@@ -4,6 +4,7 @@
 
 use crate::Result;
 use alloc::vec::Vec;
+use core::arch::x86_64::{__cpuid, __cpuid_count};
 use stela_contracts::refuse;
 
 /// Logical processors the native executor can own. Hosts with more run on
@@ -922,6 +923,33 @@ fn bootstrap_index(processors: &[Processor]) -> Result<usize, Refusal> {
     bsp.ok_or(Refusal::NoBootstrapProcessor)
 }
 
+/// The APIC ID of the processor this code runs on, for firmware that names
+/// no bootstrap processor. It is a CPUID read, not a firmware query: the
+/// loader is running on the bootstrap processor by definition.
+pub fn running_apic_id() -> Option<u64> {
+    let identity = __cpuid(0);
+    let maximum = identity.eax;
+    if maximum < 1 {
+        return None;
+    }
+    let basic = __cpuid(1);
+    for leaf in [0x1f, 0xb] {
+        if maximum >= leaf {
+            let record = __cpuid_count(leaf, 0);
+            if record.ebx & 0xffff != 0 && (record.ecx >> 8) & 0xff != 0 {
+                return Some(u64::from(record.edx));
+            }
+        }
+    }
+    if [identity.ebx, identity.edx, identity.ecx] == stela_compiler::TargetCpu::AMD_VENDOR {
+        let extended = __cpuid(0x8000_0000);
+        if extended.eax >= 0x8000_001e && __cpuid(0x8000_0001).ecx & (1 << 22) != 0 {
+            return Some(u64::from(__cpuid(0x8000_001e).eax));
+        }
+    }
+    Some(u64::from(basic.ebx >> 24))
+}
+
 /// Return the original index of every enabled, healthy logical processor,
 /// without renumbering its firmware identity: the BSP, then the first thread
 /// of each other physical core by location, then each core's second thread by
@@ -929,7 +957,25 @@ fn bootstrap_index(processors: &[Processor]) -> Result<usize, Refusal> {
 /// host with enough physical cores gives every PE a core of its own. No AP is
 /// started and no capability is inferred here.
 pub fn select(processors: &[Processor]) -> Result<Vec<usize>, Refusal> {
-    let bsp = bootstrap_index(processors)?;
+    select_naming(processors, bootstrap_index(processors)?)
+}
+
+/// Whether the firmware named no bootstrap processor at all. UEFI MP
+/// Services' BSP bit is the only place the firmware names it, and firmware
+/// that fills its processor list but never that bit leaves [`select`] with
+/// nothing to lead the roster; [`select_observed`] then reads the APIC ID of
+/// the processor it is already running on instead.
+pub fn names_no_bootstrap_processor(processors: &[Processor]) -> bool {
+    !processors.iter().any(|processor| processor.flags & BSP != 0)
+}
+
+/// [`select`] with the bootstrap processor already chosen. The rest of the
+/// order is [`select`]'s, so a caller that learned the BSP elsewhere keeps
+/// the same roster.
+pub fn select_naming(processors: &[Processor], bsp: usize) -> Result<Vec<usize>, Refusal> {
+    if processors.get(bsp).is_none_or(|processor| !processor.available()) {
+        return Err(Refusal::BootstrapUnavailable);
+    }
     let mut candidates: Vec<_> = processors
         .iter()
         .enumerate()
@@ -971,7 +1017,29 @@ pub fn select_observed<E>(
 ) -> Result<Vec<usize>, E> {
     let mut observed = alloc::vec![false; processors.len()];
     loop {
-        let logical = select(processors).map_err(&refused)?;
+        // Firmware that names no bootstrap processor still runs this code
+        // on exactly one of them, and `observe` at slot 0 reads that one's
+        // APIC ID: the observation itself says which processor leads.
+        let bsp = match bootstrap_index(processors) {
+            Ok(bsp) => bsp,
+            Err(Refusal::NoBootstrapProcessor) => {
+                let running = running_apic_id();
+                let mut chosen = None;
+                for index in 0..processors.len() {
+                    if !processors[index].available() {
+                        continue;
+                    }
+                    if Some(processors[index].apic_id) == running {
+                        chosen = Some(index);
+                        break;
+                    }
+                    chosen.get_or_insert(index);
+                }
+                chosen.ok_or(refused(Refusal::NoBootstrapProcessor))?
+            }
+            Err(refusal) => return Err(refused(refusal)),
+        };
+        let logical = select_naming(processors, bsp).map_err(&refused)?;
         let mut left_out = false;
         for (slot, &index) in logical.iter().take(MAX_CORES).enumerate() {
             if observed[index] {

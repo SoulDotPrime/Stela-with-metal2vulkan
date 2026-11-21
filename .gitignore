@@ -11,3 +11,6 @@
 /GOAL.md
 /docs/
 /AGENTS.md
+
+# Boot logs saved from a stick; they are per-machine, not source.
+/log.txt

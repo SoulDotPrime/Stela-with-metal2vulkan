@@ -1807,7 +1807,9 @@ fn place_devices(
                 .and_then(|set| set.policy_nonce),
             entropy: alloc::boxed::Box::new(bundle::entropy),
             restore: options.restore || options.install.is_some(),
-            input: options.input,
+            // The guest's hub is cabled by either input option: `--input`
+            // feeds it virtio devices, `--usb-input` the host's USB ones.
+            input: options.input || options.usb_input,
             usb: stela_soc::machine::UsbCables {
                 disks: placement.usb_disks,
                 network: placement.guest_mac,
@@ -3143,6 +3145,7 @@ fn start_devices(
             && options.install_source.is_none()
             && options.preboot.is_none()
             && !options.input
+            && !options.usb_input
             && !wants_network
             && options.usb_storage.is_empty()
             && !options.external_disks
@@ -3196,8 +3199,11 @@ fn start_devices(
             let owned_wifi = wifi_network(handoff, options);
             let owned_writes = disk_writes(handoff);
             let external = options.external_disks.then(|| {
-                stela_soc::machine::UsbCables::disk_ports(options.guest_network, options.input)
-                    .saturating_sub(owned_usb.len())
+                stela_soc::machine::UsbCables::disk_ports(
+                    options.guest_network,
+                    options.input || options.usb_input,
+                )
+                .saturating_sub(owned_usb.len())
             });
             let root = handoff.root;
             let heap = handoff.heap.physical..handoff.heap.physical + handoff.heap.bytes;
@@ -3467,7 +3473,7 @@ fn start_devices(
                 services,
                 medium,
                 preboot,
-                if options.input {
+                if options.input || options.usb_input {
                     Some(input::HostInput::new(inputs))
                 } else {
                     // Unused devices are released where their registers and

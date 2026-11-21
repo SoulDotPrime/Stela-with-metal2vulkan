@@ -7,6 +7,12 @@ A translation-based Apple Silicon layer for x86-64 PCs. It is a UEFI boot
 program with an arm64-to-x86-64 translator, a Metal driver for NVIDIA GPUs and
 a model of Apple silicon hardware. Stela currently presents itself as an M2 Mac mini.
 
+> [!NOTE]
+> **This is a fork.** It adds an AMD/Vulkan path (Radeon RX 480, Polaris10/GFX8)
+> and a fix for firmware that names no bootstrap processor, and keeps the
+> original NVIDIA backend untouched. What differs from upstream, and why:
+> [README.fork.md](README.fork.md).
+
 > [!WARNING]
 Stela is still in development. It is slow and still may not boot on supported hardware. Fixes are on the way, please submit a GitHub Issue with your boot logs if you encounter an error!
 

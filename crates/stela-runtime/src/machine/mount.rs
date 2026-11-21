@@ -754,9 +754,13 @@ fn add_usbs(
         }
         let id = devices.add_usb(controller, darts.native(controller.iommu, 0)?)?;
         // The native keyboard and pointer plug into the last connector
-        // (J473AP usb-drd1), the Mac being the downstream-facing port.
+        // (J473AP usb-drd1), the Mac being the downstream-facing port. A
+        // board whose tree places one controller has no last-but-first: on
+        // that one, the keyboard, the disks and the adapter all share the
+        // only port there is, as they share the last one above.
         let hub = input || !usb.disks.is_empty() || usb.network.is_some();
-        if hub && index + 1 == usbs && index != 0 {
+        let last = usbs == 1 || (index + 1 == usbs && index != 0);
+        if hub && last {
             let disks = usb.disks.len();
             // Whether a network adapter is attached, never its station
             // address: logs are shared, and an address printed as decimal

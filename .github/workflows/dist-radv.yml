@@ -1,0 +1,73 @@
+name: dist-radv
+
+# Builds the AMD/Vulkan image and the Linux `stela` installer on GitHub's
+# runners, which have the RAM this cannot be built on everywhere. The two
+# artefacts are what a stick is made from: `stela` on the host, and
+# `stela-radv.efi` inside it.
+#
+# The host needs more than a Rust toolchain: `mesa_clc` (which turns the Mesa
+# blorp shaders into SPIR-V at build time) links against the system LLVM's
+# SPIRV-LLVM-Translator and libclang, and needs `glslangValidator`. Those are
+# the packages installed below, and `LD_LIBRARY_PATH` is what lets `mesa_clc`
+# find the two versioned shared objects.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: dist-radv-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dist:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the host build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config git curl xz-utils \
+            llvm-18-dev libclang-18-dev clang-18 libclang-cpp18 \
+            libllvmspirvlib-18-dev \
+            glslang-tools spirv-tools libvulkan-dev \
+            python3 python3-pip
+          # `mesa_clc` loads these by soname at run time.
+          ls -l /usr/lib/llvm-18/lib/libLLVMSPIRVLib.so* /usr/lib/llvm-18/lib/libclang-cpp.so* || true
+
+      - name: Install the Rust toolchain
+        run: |
+          rustup toolchain install --profile minimal
+          rustup show
+
+      - name: Build the RADV image and the installer
+        env:
+          # The same two libraries the local `.tools/env-radv.sh` puts on the
+          # path; without them the blorp shader step fails with code 127.
+          LD_LIBRARY_PATH: /usr/lib/llvm-18/lib
+          LLVM_CONFIG: /usr/bin/llvm-config-18
+          STELA_LLVM: /usr/lib/llvm-18
+          CLANG: /usr/bin/clang-18
+          # The project pins its own LLVM for the UEFI image.
+          RUST_BACKTRACE: 1
+        run: cargo xtask dist --radv
+
+      - name: Say what was built
+        run: |
+          ls -l target/release/stela \
+                target/boot/x86_64-unknown-uefi/release/stela-radv.efi
+          ./target/release/stela --version
+
+      - name: Upload the installer and the image
+        uses: actions/upload-artifact@v4
+        with:
+          name: stela-radv-linux-x86_64
+          if-no-files-found: error
+          path: |
+            target/release/stela
+            target/boot/x86_64-unknown-uefi/release/stela-radv.efi

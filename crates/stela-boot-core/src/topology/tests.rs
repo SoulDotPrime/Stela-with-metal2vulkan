@@ -1413,3 +1413,34 @@ fn an_ap_that_cannot_be_observed_is_left_out_and_its_sibling_takes_its_place() {
         Err(Refusal::InvalidAssignment)
     );
 }
+
+/// The AMI BIOS of an AMD 990FX board lists every processor and never sets
+/// the BSP bit. The processor this code runs on still leads the roster, and
+/// `select_naming` puts it first with the same order `select` would give it
+/// had the firmware named it.
+#[test]
+fn firmware_that_names_no_bootstrap_processor_still_has_one() {
+    let mut processors = [
+        processor(0, 0, 0, 0),
+        processor(1, 0, 1, 0),
+        processor(2, 0, 0, 1),
+        processor(3, 0, 1, 1),
+    ];
+    assert!(names_no_bootstrap_processor(&processors));
+    assert_eq!(select(&processors), Err(Refusal::NoBootstrapProcessor));
+    // The running processor is the third of the firmware's list here.
+    let named = select_naming(&processors, 2).unwrap();
+    assert_eq!(named[0], 2);
+    // Naming it changes nothing else: the same roster, the same order.
+    processors[2].flags |= BSP;
+    assert_eq!(select(&processors), Ok(named));
+    // A processor that cannot run cannot lead: the running processor's
+    // health bit is advisory (`Processor::available`), but one that is not
+    // enabled at all is not a bootstrap processor.
+    let mut disabled = processors;
+    disabled[2].flags &= !ENABLED;
+    assert_eq!(
+        select_naming(&disabled, 2),
+        Err(Refusal::BootstrapUnavailable)
+    );
+}

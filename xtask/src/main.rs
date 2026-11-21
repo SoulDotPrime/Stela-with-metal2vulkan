@@ -36,7 +36,12 @@ enum Task {
         low_memory: bool,
     },
     /// Build the release `stela` with its matching `stela.efi` embedded.
-    Dist,
+    Dist {
+        /// Build the image for an AMD GPU: amdgpu and RADV in it, and the AMD
+        /// port's firmware on the sticks `stela` writes.
+        #[arg(long)]
+        radv: bool,
+    },
     /// Run ignored oracle tests whose declared inputs are present and write a dated report.
     Oracles(oracles::Oracles),
     /// Build, run and debug the UEFI mount in x86 QEMU.
@@ -73,7 +78,7 @@ enum Task {
 fn main() -> ExitCode {
     let result = match Cli::parse().task {
         Task::Check { fix, low_memory } => check::run(fix, low_memory).map(|()| ExitCode::SUCCESS),
-        Task::Dist => dist::run().map(|()| ExitCode::SUCCESS),
+        Task::Dist { radv } => dist::run(radv).map(|()| ExitCode::SUCCESS),
         Task::Oracles(task) => task.run().map(|()| ExitCode::SUCCESS),
         Task::Boot(command) => boot::run(command),
         Task::Gpu(command) => gpu::run(command).map(|()| ExitCode::SUCCESS),

@@ -33,6 +33,8 @@ pub const VERIFY_ON_READ: &str = "--verify-on-read";
 pub const UPDATE_RESTORE: &str = mount_interface::UPDATE_RESTORE_OPTION;
 pub const EXTERNAL_DISKS: &str = "--external-disks";
 pub const NATIVE_CORES: &str = "--native-cores";
+/// The host's USB keyboards and pointers reach the guest (`--usb-input`).
+pub const USB_INPUT: &str = "--usb-input";
 pub const GUEST_PES: &str = "--guest-pes";
 /// The size a GPU's display is taken in (`--display-size WIDTHxHEIGHT`), in
 /// place of the monitor's preferred mode: for a capture device that cannot
@@ -274,6 +276,11 @@ pub struct System {
     /// Cable the native USB keyboard and pointer to the last USB-C
     /// controller and feed it the host's virtio-input devices (`--input`).
     pub input: bool,
+    /// Cable the native USB keyboard and pointer, open the host's xHCI
+    /// controllers and feed the guest the keyboards and pointers found on
+    /// them (`--usb-input`). Unlike `--input`, it needs no virtio device on
+    /// the host: it is how a PC's USB keyboard and mouse reach macOS.
+    pub usb_input: bool,
     /// Explicit native executors and guest PEs (`--native-cores N`), one per
     /// logical processor; SMT siblings count after every physical core.
     pub native_cores: Option<usize>,
@@ -394,6 +401,7 @@ impl Default for System {
             survey: false,
             idle_skip: false,
             input: false,
+            usb_input: false,
             native_cores: None,
             guest_pes: None,
             display_size: None,
@@ -841,6 +849,7 @@ impl fmt::Display for System {
         line.value(IPV4_GATEWAY, self.ipv4_gateway)?;
         line.value(DNS, (!self.dns.is_empty()).then(|| Servers(&self.dns)))?;
         line.flag("--input", self.input)?;
+        line.flag(USB_INPUT, self.usb_input)?;
         line.flag("--idle-skip", self.idle_skip)?;
         line.flag("--survey", self.survey)?;
         line.flag("--sep-observe", self.sep_observe)?;

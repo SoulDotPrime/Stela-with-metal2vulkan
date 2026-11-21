@@ -521,9 +521,14 @@ pub fn run(command: Command) -> Result<ExitCode> {
     }
 }
 
-pub fn build(release: bool) -> Result<PathBuf> {
+pub fn build(release: bool, radv: bool) -> Result<PathBuf> {
     crate::gpu::build_nvk(crate::gpu::default_jobs())?;
-    build_with_diagnostics(release, false, Gpu::Nvk)
+    if radv {
+        // The AMD image's Metal device is RADV, so the image refuses to build
+        // unless `gpu nvk` linked it beside NVK.
+        crate::gpu::require_vulkan_driver("amd")?;
+    }
+    build_with_diagnostics(release, false, if radv { Gpu::Radv } else { Gpu::Nvk })
 }
 
 /// The GPU drivers a `stela.efi` carries beyond its Linux environment.

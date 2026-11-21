@@ -547,7 +547,33 @@ pub(crate) fn capture(requested: usize) -> Result<Region, Error> {
             processors.len()
         ));
     }
-    let bsp = topology::select(&processors).map_err(Error::Topology)?[0];
+    // UEFI MP Services' BSP bit is the only place firmware names the
+    // bootstrap processor, and some firmware (the AMI 990FX BIOS among it)
+    // fills the list and never sets it. The processor running this code is
+    // the BSP, so its own CPUID APIC ID names it, as Linux's
+    // `boot_cpu_physical_apicid` does. `select_observed` keeps observing the
+    // APIC IDs afterwards and leaves out any processor that answers with
+    // another identity, so this is a naming of the BSP, not a bypass of it.
+    let bsp = match topology::select(&processors) {
+        Ok(order) => order[0],
+        Err(topology::Refusal::NoBootstrapProcessor) => {
+            let running = topology::running_apic_id();
+            let index = processors
+                .iter()
+                .position(|processor| processor.available() && Some(processor.apic_id) == running);
+            let Some(index) = index else {
+                return Err(Error::Topology(topology::Refusal::NoBootstrapProcessor));
+            };
+            crate::output::arguments(format_args!(
+                "HOST PROCESSORS the firmware names no bootstrap processor; the running one is \
+                 processor {} at APIC ID {:#x}\n",
+                processors[index].processor_number, processors[index].apic_id
+            ));
+            processors[index].flags |= topology::BSP;
+            index
+        }
+        Err(refusal) => return Err(Error::Topology(refusal)),
+    };
     if mp.who_am_i().map_err(|_| Error::WrongBootstrapProcessor)?
         != processors[bsp].processor_number as usize
     {

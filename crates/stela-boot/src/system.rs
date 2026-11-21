@@ -948,14 +948,24 @@ fn load(
     crate::stop_record::before_exit();
     crate::stop_record::mark_running(log.as_ref().map(|guid| guid.0));
     crate::status::begin("Taking control of the other processors");
-    // Named before the buffer's allocation, the last one: the firmware's
-    // exit can take long, and the screen keeps this detail through it. The
-    // next detail logs its time (`status::progress`).
-    crate::status::progress("the firmware ends its boot services");
-    // The last allocation Stela makes before the exit: from here to the
-    // exit's own map read only the firmware's timer and logs close.
+    // This operation has caused real hardware boots to stop at this step.
+    // Persist the substep before entering firmware code so the next log says
+    // whether the final map buffer was being allocated or the log was closing.
+    crate::status::progress("allocating the final memory-map buffer");
+    crate::output::arguments(format_args!(
+        "BOOT HANDOFF final memory-map allocation starting\n"
+    ));
+    crate::output::flush_log();
+    // The last allocation Stela makes before the exit; the buffer reserves
+    // spare descriptors for allocations made by firmware exit notifications.
     let final_map = crate::boot_exit::Buffer::allocate();
+    crate::status::progress("closing the firmware log");
+    crate::output::arguments(format_args!("BOOT HANDOFF closing firmware log\n"));
+    crate::output::flush_log();
     crate::output::leave_boot_services();
+    // The firmware log is now closed. The screen names the last operation
+    // before the call; successful return is recorded by boot_exit::exit.
+    crate::status::progress("calling ExitBootServices");
     // SAFETY: no protocol or pool allocation outlives this call; every page
     // Stela keeps is LOADER_DATA or LOADER_CODE.
     let map = unsafe { crate::boot_exit::exit(final_map) };

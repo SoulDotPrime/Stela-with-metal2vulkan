@@ -1,15 +1,13 @@
 name: dist-radv
 
-# Builds the AMD/Vulkan image and the Linux `stela` installer on GitHub's
-# runners, which have the RAM this cannot be built on everywhere. The two
-# artefacts are what a stick is made from: `stela` on the host, and
-# `stela-radv.efi` inside it.
+# Builds the AMD/Vulkan image and the Linux `stela` installer. The steps are
+# the release workflow's own (`.github/workflows/release.yml`): Clang 21 from
+# apt.llvm.org, the SPIR-V libraries `.github/spirv.sh` builds there, and the
+# upstream GPU sources `cargo xtask gpu fetch` checks out. None of them is
+# optional: the image is not built from a naked toolchain.
 #
-# The host needs more than a Rust toolchain: `mesa_clc` (which turns the Mesa
-# blorp shaders into SPIR-V at build time) links against the system LLVM's
-# SPIRV-LLVM-Translator and libclang, and needs `glslangValidator`. Those are
-# the packages installed below, and `LD_LIBRARY_PATH` is what lets `mesa_clc`
-# find the two versioned shared objects.
+# The runner is what makes this worth doing elsewhere than on a desktop: the
+# RADV/ACO/LLVM build wants more RAM than a small machine has.
 
 on:
   push:
@@ -17,43 +15,69 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: dist-radv-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   dist:
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    timeout-minutes: 240
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
-      - name: Install the host build dependencies
+      # Clang 21 is the floor: `xtask/src/clang.rs` admits 21 to 23 only,
+      # and Ubuntu 24.04 ships 18. mesa_clc links this toolchain's LLVM and
+      # libclang-cpp.
+      - name: Install Clang 21 and the GPU host tools
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential cmake ninja-build pkg-config git curl xz-utils \
-            llvm-18-dev libclang-18-dev clang-18 libclang-cpp18 \
-            libllvmspirvlib-18-dev \
-            glslang-tools spirv-tools libvulkan-dev \
-            python3 python3-pip
-          # `mesa_clc` loads these by soname at run time.
-          ls -l /usr/lib/llvm-18/lib/libLLVMSPIRVLib.so* /usr/lib/llvm-18/lib/libclang-cpp.so* || true
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc >/dev/null
+          echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-21 main" \
+            | sudo tee /etc/apt/sources.list.d/llvm-21.list
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends \
+            clang-21 lld-21 llvm-21 llvm-21-dev libclang-21-dev libclang-cpp21-dev \
+            cmake ninja-build pkg-config git curl xz-utils zstd \
+            glslang-tools spirv-tools python3
+          echo /usr/lib/llvm-21/bin >> "$GITHUB_PATH"
 
-      - name: Install the Rust toolchain
+      - name: Install Rust
         run: |
-          rustup toolchain install --profile minimal
-          rustup show
+          rustup toolchain install
+          rustc --version
+          clang --version | head -1
+
+      # The release workflow's own script: SPIRV-Tools and SPIRV-LLVM-
+      # Translator for LLVM 21, static, with pkg-config files.
+      - name: SPIR-V libraries
+        run: |
+          bash .github/spirv.sh .tools/spirv
+          echo "PKG_CONFIG_PATH=$PWD/.tools/spirv/lib/pkgconfig" >> "$GITHUB_ENV"
+
+      # Mesa's and LLVM's sources for the image, at the pins the repository
+      # records. `dist` needs them; it does not unpack them.
+      - name: Fetch upstream GPU sources
+        run: cargo xtask gpu fetch
 
       - name: Build the RADV image and the installer
         env:
-          # The same two libraries the local `.tools/env-radv.sh` puts on the
-          # path; without them the blorp shader step fails with code 127.
-          LD_LIBRARY_PATH: /usr/lib/llvm-18/lib
-          LLVM_CONFIG: /usr/bin/llvm-config-18
-          STELA_LLVM: /usr/lib/llvm-18
-          CLANG: /usr/bin/clang-18
-          # The project pins its own LLVM for the UEFI image.
+          # The two shared objects `mesa_clc` loads by soname once the
+          # libraries build; the local `.tools/env-radv.sh` carries the same.
+          LD_LIBRARY_PATH: /usr/lib/llvm-21/lib
           RUST_BACKTRACE: 1
         run: cargo xtask dist --radv
 
@@ -61,7 +85,12 @@ jobs:
         run: |
           ls -l target/release/stela \
                 target/boot/x86_64-unknown-uefi/release/stela-radv.efi
+          efi=target/boot/x86_64-unknown-uefi/release/stela-radv.efi
+          [[ "$(head -c 2 "$efi")" == MZ ]] || { echo "::error::$efi is not a PE image"; exit 1; }
           ./target/release/stela --version
+          { echo "Vulkan drivers: $(paste -sd, target/gpu/nvk/vulkan-drivers)"
+            echo "stela-radv.efi: $(stat -c %s "$efi") bytes"
+            echo "sha256 $(sha256sum "$efi" | cut -d' ' -f1)"; } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the installer and the image
         uses: actions/upload-artifact@v4
